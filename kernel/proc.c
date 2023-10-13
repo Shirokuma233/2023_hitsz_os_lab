@@ -291,6 +291,14 @@ void reparent(struct proc *p) {
   }
 }
 
+
+//获取对应枚举类型的字符串
+const char* getStateString(int state) {
+    static const char* stateStrings[] = { "unused", "sleep", "runble", "run", "zombie" };
+    return stateStrings[state];
+}
+
+
 // Exit the current process.  Does not return.
 // An exited process remains in the zombie state
 // until its parent calls wait().
@@ -332,6 +340,21 @@ void exit(int status) {
   struct proc *original_parent = p->parent;
   release(&p->lock);
 
+  // 打印父进程信息
+  exit_info("proc %d exit, parent pid %d, name %s, state %s\n", p->pid, original_parent->pid, original_parent->name, getStateString(original_parent->state));
+
+
+  //打印子进程信息
+  struct proc *pp;
+  int cnt = 0;  //子进程编号从0开始
+  for (pp = proc; pp < &proc[NPROC]; pp++) {
+
+    if (pp->parent == p) {  //若是进程p的子进程就打印
+      exit_info("proc %d exit, child %d, pid %d, name %s, state %s\n", p->pid, cnt, pp->pid, pp->name, getStateString(pp->state));
+      cnt++;
+    }
+  }
+
   // we need the parent's lock in order to wake it up from wait().
   // the parent-then-child rule says we have to lock it first.
   acquire(&original_parent->lock);
@@ -349,14 +372,16 @@ void exit(int status) {
 
   release(&original_parent->lock);
 
+
   // Jump into the scheduler, never to return.
   sched();
   panic("zombie exit");
+
 }
 
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.
-int wait(uint64 addr) {
+int wait(uint64 addr, int flags) {
   struct proc *np;
   int havekids, pid;
   struct proc *p = myproc();
@@ -399,7 +424,11 @@ int wait(uint64 addr) {
       release(&p->lock);
       return -1;
     }
-
+    if(flags == 1)
+    {
+      release(&p->lock);
+      return -1;
+    }
     // Wait for a child to exit.
     sleep(p, &p->lock);  // DOC: wait-sleep
   }
