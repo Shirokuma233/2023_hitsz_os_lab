@@ -75,7 +75,7 @@ bget(uint dev, uint blockno)
 {
   struct buf *b;
 
-  //blockno 这个磁盘块应该在的桶编号
+  //当前块的桶编号
   int id = blockno % NBUCKETS;
   acquire(&bcache.lock[id]);
 
@@ -88,45 +88,32 @@ bget(uint dev, uint blockno)
       return b;
     }
   }
-
-
+  release(&bcache.lock[id]);
   // Not cached.
   // Recycle the least recently used (LRU) unused buffer.
-  for(b = bcache.head[id].prev; b != &bcache.head[id]; b = b->prev){
-    if(b->refcnt == 0) {
-      b->dev = dev;
-      b->blockno = blockno;
-      b->valid = 0;
-      b->refcnt = 1;
-      release(&bcache.lock[id]);
-      acquiresleep(&b->lock);
-      return b;
-    }
-  }
-    printf("未找到空闲buf\n");
-  //如果查找哈希桶内部还是没有空闲的buf，就只能取别人那里抢了
-  release(&bcache.lock[id]);
-  //这样子可以确保获取全局锁的时候，肯定不可能出现另一个也想获取全局锁而自己还拥有某个hash桶的锁的情况
-  //这样设计的根本原因在于，要移动hash桶里的数据块一定要在我访问的过程中总是可以得到这个锁的(只要等待下去)。
+  //根据实验指导书，允许按照顺序查找引用计数为0的块，我们直接遍历，且由于原来桶未命中，说明原来桶里所有数据一定被引用
+  //根据指导书的防止死锁策略加锁解锁
   acquire(&bcache.global_lock);
   acquire(&bcache.lock[id]);
   for(b = bcache.buf; b< bcache.buf + NBUF; b++)
   {
     //但查找到引用计数0的时候
     //这里加锁应该放在判断引用次数为0之前，否则会出现前一刻应用计数为0，后一刻其他cpu加锁使用了该缓存块。
+
+
+    //这里有问题
+
+
     int new_id = (b->blockno) % NBUCKETS;
-    //!!!!!!!!!!!!这里不可以获取自己的锁，不然过不去，卡了半天!!!! shit
-    if(new_id == id) continue;
-    printf("id:%d, new_id:%d", id, new_id);
     acquire(&bcache.lock[new_id]);
     if(b->refcnt == 0) {
       b->dev = dev;
       b->blockno = blockno;
       b->valid = 0;
       b->refcnt = 1;
-      release(&bcache.lock[new_id]);
-      release(&bcache.lock[id]);
       release(&bcache.global_lock);
+      release(&bcache.lock[id]);
+      release(&bcache.lock[new_id]);
       acquiresleep(&b->lock);
       return b;
     }
@@ -135,6 +122,9 @@ bget(uint dev, uint blockno)
       release(&bcache.lock[new_id]);
     }
   }
+  //如果没有找到,要记得释放全局锁和当前桶锁
+  release(&bcache.global_lock);
+  release(&bcache.lock[id]);
   panic("bget: no buffers");
 }
 
