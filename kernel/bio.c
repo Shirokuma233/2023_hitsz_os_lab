@@ -88,8 +88,6 @@ bget(uint dev, uint blockno)
       return b;
     }
   }
-
-
   // Not cached.
   // Recycle the least recently used (LRU) unused buffer.
   for(b = bcache.head[id].prev; b != &bcache.head[id]; b = b->prev){
@@ -103,7 +101,7 @@ bget(uint dev, uint blockno)
       return b;
     }
   }
-    printf("未找到空闲buf\n");
+
   //如果查找哈希桶内部还是没有空闲的buf，就只能取别人那里抢了
   release(&bcache.lock[id]);
   //这样子可以确保获取全局锁的时候，肯定不可能出现另一个也想获取全局锁而自己还拥有某个hash桶的锁的情况
@@ -117,13 +115,23 @@ bget(uint dev, uint blockno)
     int new_id = (b->blockno) % NBUCKETS;
     //!!!!!!!!!!!!这里不可以获取自己的锁，不然过不去，卡了半天!!!! shit
     if(new_id == id) continue;
-    printf("id:%d, new_id:%d", id, new_id);
+    //printf("id:%d, new_id:%d", id, new_id);
     acquire(&bcache.lock[new_id]);
+    //printf("%d\n", b->refcnt);
     if(b->refcnt == 0) {
+      
       b->dev = dev;
       b->blockno = blockno;
       b->valid = 0;
       b->refcnt = 1;
+      //把这一块换到当前桶,下面两行是把b移出他原来的桶，更新他邻居的指针值
+      b->next->prev = b->prev;
+      b->prev->next = b->next;
+      //同初始化头插法
+      b->next = bcache.head[id].next;
+      b->prev = &bcache.head[id];
+      bcache.head[id].next->prev = b;
+      bcache.head[id].next = b;
       release(&bcache.lock[new_id]);
       release(&bcache.lock[id]);
       release(&bcache.global_lock);
@@ -135,6 +143,7 @@ bget(uint dev, uint blockno)
       release(&bcache.lock[new_id]);
     }
   }
+
   panic("bget: no buffers");
 }
 

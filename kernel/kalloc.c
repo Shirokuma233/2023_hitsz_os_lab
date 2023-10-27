@@ -40,7 +40,6 @@ freerange(void *pa_start, void *pa_end)
 {
   char *p;
   p = (char*)PGROUNDUP((uint64)pa_start);
-  //每次为一个cpu分配一页的内存,全都分配完一遍了之后循环从头分配
   for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
     kfree(p);
 }
