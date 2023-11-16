@@ -181,6 +181,11 @@ int             copyinstr(pagetable_t, char *, uint64, uint64);
 int             test_pagetable();
 void            vmprint(pagetable_t pgtbl);
 void            vpprint(pagetable_t pagetable, int rank, uint64 L2, uint64 L1);
+pagetable_t     kpcreate();
+void            my_kvmmap(uint64 va, uint64 pa, uint64 sz, int perm, pagetable_t k_pagetable);
+void            proc_free_k_pagetable(pagetable_t k_pagetable);
+void            sync_pagetable(pagetable_t u_pagetable, pagetable_t k_pagetable);
+void            set_pte_U2K(pagetable_t k_pagetable, uint64 va_second, uint64 va_first, pte_t pte_first);
 
 // plic.c
 void            plicinit(void);

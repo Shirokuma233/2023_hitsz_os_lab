@@ -33,6 +33,7 @@ void procinit(void) {
     // Map it high in memory, followed by an invalid
     // guard page.
     char *pa = kalloc();
+    p->kstack_pa = (uint64)pa;  //就加了这一句话,保留内核栈物理地址为了后面映射做准备
     if (pa == 0) panic("kalloc");
     uint64 va = KSTACK((int)(p - proc));
     kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
@@ -117,6 +118,10 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  //任务二设置,先建立页表，后映射
+  p->k_pagetable = kpcreate();
+  my_kvmmap(p->kstack, (uint64)p->kstack_pa, PGSIZE, PTE_R | PTE_W, p->k_pagetable);
+
   return p;
 }
 
@@ -136,6 +141,11 @@ static void freeproc(struct proc *p) {
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  //调用函数将这个进程的内核页表释放,另外我们加入的几个变量最好也置0
+  //vmprint(p->k_pagetable);
+  if(p->k_pagetable) proc_free_k_pagetable(p->k_pagetable);
+  p->k_pagetable = 0;
+  p->kstack_pa = 0;
 }
 
 // Create a user page table for a given process,
@@ -192,6 +202,9 @@ void userinit(void) {
   // and data into it.
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
+
+  //task3,在给页表初始化完之后就可以映射了,把用户根页表的0-511个页表项尝试映射
+  //sync_pagetable(p->pagetable, p->k_pagetable);
 
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
@@ -430,10 +443,18 @@ void scheduler(void) {
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+
+        //在此处切换内核独立页表,修改satp寄存器和刷新tlb
+        w_satp(MAKE_SATP(p->k_pagetable));
+        sfence_vma();
+
         swtch(&c->context, &p->context);
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
+        //在cpu进程改变之前切换回全局页表
+        kvminithart();
+
         c->proc = 0;
 
         found = 1;

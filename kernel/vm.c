@@ -52,7 +52,7 @@ void kvminithart() {
   sfence_vma();
 }
 
-// 根据虚拟地址查找页表项
+// 根据虚拟地址查找页表项,实际是叶子页表项,观察level即可看出
 //  Return the address of the PTE in page table pagetable
 //  that corresponds to virtual address va.  If alloc!=0,
 //  create any required page-table pages.
@@ -65,6 +65,7 @@ void kvminithart() {
 //    21..29 -- 9 bits of level-1 index.
 //    12..20 -- 9 bits of level-0 index.
 //     0..11 -- 12 bits of byte offset within the page.
+
 pte_t *walk(pagetable_t pagetable, uint64 va, int alloc) {
   if (va >= MAXVA) panic("walk");
 
@@ -81,7 +82,7 @@ pte_t *walk(pagetable_t pagetable, uint64 va, int alloc) {
   return &pagetable[PX(0, va)];
 }
 
-// 根据虚拟地址查找物理地址，只能用于查找用户页表
+// 根据虚拟地址查找最终的物理地址，只能用于查找用户页表
 //  Look up a virtual address, return the physical address,
 //  or 0 if not mapped.
 //  Can only be used to look up user pages.
@@ -403,40 +404,122 @@ void vmprint(pagetable_t pagetable) {
   vpprint(pagetable, 2, 0, 0);
 }
 
-//用于递归打印用户页表的函数, 开始用了int和不是uint64而踩坑了，因为位数不够，移位会出现问题
-void vpprint(pagetable_t pagetable, int rank, uint64 L2, uint64 L1)
-{
+// 用于递归打印用户页表的函数, 开始用了int而不是uint64而踩坑了，因为位数不够，移位会出现问题
+void vpprint(pagetable_t pagetable, int rank, uint64 L2, uint64 L1) {
   for (int i = 0; i < 512; i++) {
     pte_t pte = pagetable[i];  // 获取第i条PTE
-    //首先如果不有效就continue 
-    if(!(pte & PTE_V)) continue;
-    //其次如果有效，先求出pa,flags位
+    // 首先如果不有效就continue
+    if (!(pte & PTE_V)) continue;
+    // 其次如果有效，先求出pa,flags位
     uint64 pa = PTE2PA(pte);
     char flags[5] = "----";
-    if(pte & PTE_R) flags[0] = 'r';
-    if(pte & PTE_W) flags[1] = 'w';
-    if(pte & PTE_X) flags[2] = 'x';
-    if(pte & PTE_U) flags[3] = 'u';
-    //那我们根据他是第几级页目录打印不同的内容
-    if(rank == 2) 
-    {
+    if (pte & PTE_R) flags[0] = 'r';
+    if (pte & PTE_W) flags[1] = 'w';
+    if (pte & PTE_X) flags[2] = 'x';
+    if (pte & PTE_U) flags[3] = 'u';
+    // 那我们根据他是第几级页目录打印不同的内容
+    if (rank == 2) {
       printf("||idx: %d: pa: %p, flags: %s\n", i, pa, flags);
-    }
-    else if(rank == 1) 
-    {
+    } else if (rank == 1) {
       printf("||   ||idx: %d: pa: %p, flags: %s\n", i, pa, flags);
-    }
-    else 
-    {
+    } else {
       uint64 va = (L2 << 30) + (L1 << 21) + (i << 12);
       printf("||   ||   ||idx: %d: va: %p -> pa: %p, flags: %s\n", i, va, pa, flags);
     }
-    //判断PTE的Flag位，如果还有下一级页表(即当前是根页表或次页表)，
-    if ((pte & (PTE_R|PTE_W|PTE_X)) == 0) {
-      uint64 child = PTE2PA(pte);    // 将PTE转为为物理地址
-      //同理对根页表和次页表参数不同
-      if(rank == 2) vpprint((pagetable_t)child, rank-1, i, 0);
-      else if(rank == 1) vpprint((pagetable_t)child, rank-1, L2, i);  //此时L2索引是前面传进来的
+    // 判断PTE的Flag位，如果还有下一级页表(即当前是根页表或次页表)，
+    if ((pte & (PTE_R | PTE_W | PTE_X)) == 0) {
+      uint64 child = PTE2PA(pte);  // 将PTE转为为物理地址
+      // 同理对根页表和次页表参数不同
+      if (rank == 2)
+        vpprint((pagetable_t)child, rank - 1, i, 0);
+      else if (rank == 1)
+        vpprint((pagetable_t)child, rank - 1, L2, i);  // 此时L2索引是前面传进来的
+    }
+  }
+}
+
+// task2,给内核进程创建一个页表，返回这个页表
+pagetable_t kpcreate() {
+  pagetable_t k_pagetable = (pagetable_t)kalloc();
+
+  memset(k_pagetable, 0, PGSIZE);
+
+  // uart registers
+  my_kvmmap(UART0, UART0, PGSIZE, PTE_R | PTE_W, k_pagetable);
+
+  // virtio mmio disk interface
+  my_kvmmap(VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W, k_pagetable);
+
+  // PLIC
+  my_kvmmap(PLIC, PLIC, 0x400000, PTE_R | PTE_W, k_pagetable);
+
+  // map kernel text executable and read-only.
+  my_kvmmap(KERNBASE, KERNBASE, (uint64)etext - KERNBASE, PTE_R | PTE_X, k_pagetable);
+
+  // map kernel data and the physical RAM we'll make use of.
+  my_kvmmap((uint64)etext, (uint64)etext, PHYSTOP - (uint64)etext, PTE_R | PTE_W, k_pagetable);
+
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+  my_kvmmap(TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X, k_pagetable);
+
+  return k_pagetable;
+}
+
+// 用于task2的map映射
+void my_kvmmap(uint64 va, uint64 pa, uint64 sz, int perm, pagetable_t k_pagetable) {
+  if (mappages(k_pagetable, va, sz, pa, perm) != 0) panic("my_kvmmap");
+}
+
+// 用于task2的内核页表清除,不释放叶子页表的物理帧
+void proc_free_k_pagetable(pagetable_t k_pagetable) {
+  // there are 2^9 = 512 PTEs in a page table.
+  // printf("当前页表:%p\n", k_pagetable);
+  for (int i = 0; i < 512; i++) {
+    pte_t pte = k_pagetable[i];
+    // printf("当前pa:%p\n", PTE2PA(pte));
+    if ((pte & PTE_V) && (pte & (PTE_R | PTE_W | PTE_X)) == 0) {
+      // this PTE points to a lower-level page table.
+      uint64 child = PTE2PA(pte);
+      // printf("当前内部pa:%p\n", PTE2PA(pte));
+      proc_free_k_pagetable((pagetable_t)child);
+      k_pagetable[i] = 0;
+    }
+  }
+  // cccccc放过来的时候放到for循环里去了，debug了1个小时，无语死了aaaaaaaaa
+  kfree((void *)k_pagetable);
+}
+
+// task3用于设置一个内核页表的次页表项
+void set_pte_U2K(pagetable_t k_pagetable, uint64 va_second, uint64 va_first, pte_t pte_first) {
+  // 类似采用walk方法,若当前地址有子页表则进入，否则新建页表初始化后进入
+  pte_t *pte = &k_pagetable[va_second];
+  if (*pte & PTE_V) {
+    k_pagetable = (pagetable_t)PTE2PA(*pte);
+  } else {
+    k_pagetable = (pde_t *)kalloc();
+    memset(k_pagetable, 0, PGSIZE);
+    *pte = PA2PTE(k_pagetable) | PTE_V;
+  }
+  // 至此根页表项构造完毕，且有效,下面进入次页表,后面我们不需要在分配页表空间了，直接赋值即可
+  k_pagetable[va_first] = pte_first;
+}
+
+// task3用于把进程的用户表映射到内核页表里,采用共享叶子页表的办法
+void sync_pagetable(pagetable_t u_pagetable, pagetable_t k_pagetable) {
+  // 将当前用户页表的对应虚拟地址的页表项加入到k_pagetable
+  for (uint64 va_second = 0; va_second < 512; va_second++) {
+    pte_t pte_second = u_pagetable[va_second];
+    if (pte_second & PTE_V)  //  有效才进入下一级页表
+    {
+      pagetable_t u_pagetable_first = (pagetable_t)PTE2PA(pte_second);
+      for (uint64 va_first = 0; va_first < 512; va_first++) {
+        pte_t pte_first = u_pagetable_first[va_first];
+        if (pte_first & PTE_V)  //  如果这里也有效，那么就需要把当前va_second和va_first位置的内核页表的pte设置为pte_first
+        {
+          set_pte_U2K(k_pagetable, va_second, va_first, pte_first);
+        }
+      }
     }
   }
 }
