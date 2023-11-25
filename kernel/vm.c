@@ -332,21 +332,7 @@ int copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len) {
 //  Copy len bytes to dst from virtual address srcva in a given page table.
 //  Return 0 on success, -1 on error.
 int copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len) {
-  uint64 n, va0, pa0;
-
-  while (len > 0) {
-    va0 = PGROUNDDOWN(srcva);
-    pa0 = walkaddr(pagetable, va0);
-    if (pa0 == 0) return -1;
-    n = PGSIZE - (srcva - va0);
-    if (n > len) n = len;
-    memmove(dst, (void *)(pa0 + (srcva - va0)), n);
-
-    len -= n;
-    dst += n;
-    srcva = va0 + PGSIZE;
-  }
-  return 0;
+  return copyin_new(pagetable, dst, srcva, len);
 }
 
 // 从用户空间复制 null-terminated 字符串到内核的函数
@@ -355,38 +341,7 @@ int copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len) {
 //  until a '\0', or max.
 //  Return 0 on success, -1 on error.
 int copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max) {
-  uint64 n, va0, pa0;
-  int got_null = 0;
-
-  while (got_null == 0 && max > 0) {
-    va0 = PGROUNDDOWN(srcva);
-    pa0 = walkaddr(pagetable, va0);
-    if (pa0 == 0) return -1;
-    n = PGSIZE - (srcva - va0);
-    if (n > max) n = max;
-
-    char *p = (char *)(pa0 + (srcva - va0));
-    while (n > 0) {
-      if (*p == '\0') {
-        *dst = '\0';
-        got_null = 1;
-        break;
-      } else {
-        *dst = *p;
-      }
-      --n;
-      --max;
-      p++;
-      dst++;
-    }
-
-    srcva = va0 + PGSIZE;
-  }
-  if (got_null) {
-    return 0;
-  } else {
-    return -1;
-  }
+  return copyinstr_new(pagetable, dst, srcva, max);
 }
 
 // 它比较当前的 satp 寄存器的值与全局页表 kernel_pagetable 的 satp 值是否相等，如果不相等则返回 1，否则返回 0
@@ -506,20 +461,11 @@ void set_pte_U2K(pagetable_t k_pagetable, uint64 va_second, uint64 va_first, pte
 }
 
 // task3用于把进程的用户表映射到内核页表里,采用共享叶子页表的办法
-void sync_pagetable(pagetable_t u_pagetable, pagetable_t k_pagetable) {
+void sync_pagetable(pagetable_t u_pagetable, pagetable_t k_pagetable, uint64 start, uint64 end) {
   // 将当前用户页表的对应虚拟地址的页表项加入到k_pagetable
-  for (uint64 va_second = 0; va_second < 512; va_second++) {
-    pte_t pte_second = u_pagetable[va_second];
-    if (pte_second & PTE_V)  //  有效才进入下一级页表
-    {
-      pagetable_t u_pagetable_first = (pagetable_t)PTE2PA(pte_second);
-      for (uint64 va_first = 0; va_first < 512; va_first++) {
-        pte_t pte_first = u_pagetable_first[va_first];
-        if (pte_first & PTE_V)  //  如果这里也有效，那么就需要把当前va_second和va_first位置的内核页表的pte设置为pte_first
-        {
-          set_pte_U2K(k_pagetable, va_second, va_first, pte_first);
-        }
-      }
-    }
+  for(uint64 address = start ; address < end ; address += PGSIZE){
+    pte_t *pte = walk(u_pagetable,address,0);           // 返回进程中对应虚拟地址的页表项
+    pte_t *kernel_pte = walk(k_pagetable,address,1);    // 新增内核页表在对应虚拟地址的页表项
+    *kernel_pte = (*pte)&(~PTE_U);                      // 标志位修改
   }
 }

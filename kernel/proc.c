@@ -214,6 +214,7 @@ void userinit(void) {
   p->cwd = namei("/");
 
   p->state = RUNNABLE;
+  sync_pagetable(p->pagetable, p->k_pagetable, 0, PGSIZE);
 
   release(&p->lock);
 }
@@ -229,6 +230,7 @@ int growproc(int n) {
     if ((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
+    sync_pagetable(p->pagetable, p->k_pagetable, sz-n, sz);
   } else if (n < 0) {
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
@@ -274,6 +276,9 @@ int fork(void) {
   pid = np->pid;
 
   np->state = RUNNABLE;
+
+  //task3,把子进程的用户页表映射
+  sync_pagetable(np->pagetable, np->k_pagetable, 0, np->sz);
 
   release(&np->lock);
 

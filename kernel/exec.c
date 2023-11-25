@@ -97,6 +97,9 @@ int exec(char *path, char **argv) {
   p->trapframe->sp = sp;          // initial stack pointer
   proc_freepagetable(oldpagetable, oldsz);
 
+  //task3
+  sync_pagetable(p->pagetable, p->k_pagetable, 0, p->sz);
+
   if(p->pid==1) vmprint(p->pagetable);
   return argc;  // this ends up in a0, the first argument to main(argc, argv)
 
