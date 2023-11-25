@@ -445,27 +445,22 @@ void proc_free_k_pagetable(pagetable_t k_pagetable) {
   kfree((void *)k_pagetable);
 }
 
-// task3用于设置一个内核页表的次页表项
-void set_pte_U2K(pagetable_t k_pagetable, uint64 va_second, uint64 va_first, pte_t pte_first) {
-  // 类似采用walk方法,若当前地址有子页表则进入，否则新建页表初始化后进入
-  pte_t *pte = &k_pagetable[va_second];
-  if (*pte & PTE_V) {
-    k_pagetable = (pagetable_t)PTE2PA(*pte);
-  } else {
-    k_pagetable = (pde_t *)kalloc();
-    memset(k_pagetable, 0, PGSIZE);
-    *pte = PA2PTE(k_pagetable) | PTE_V;
-  }
-  // 至此根页表项构造完毕，且有效,下面进入次页表,后面我们不需要在分配页表空间了，直接赋值即可
-  k_pagetable[va_first] = pte_first;
-}
-
-// task3用于把进程的用户表映射到内核页表里,采用共享叶子页表的办法
-void sync_pagetable(pagetable_t u_pagetable, pagetable_t k_pagetable, uint64 start, uint64 end) {
-  // 将当前用户页表的对应虚拟地址的页表项加入到k_pagetable
-  for(uint64 address = start ; address < end ; address += PGSIZE){
-    pte_t *pte = walk(u_pagetable,address,0);           // 返回进程中对应虚拟地址的页表项
-    pte_t *kernel_pte = walk(k_pagetable,address,1);    // 新增内核页表在对应虚拟地址的页表项
-    *kernel_pte = (*pte)&(~PTE_U);                      // 标志位修改
+// task3用于把进程的用户表映射到内核页表里,复制表，采用递归实现
+void sync_pagetable(pagetable_t u_pagetable, pagetable_t k_pagetable) {
+  for (int i = 0; i < 512; i++) {
+    pte_t pte = u_pagetable[i];
+    //如果是非叶子结点就递归进入,并且还要分配内核页表下一级的页,并且分配完之后要更新页表项
+    if ((pte & PTE_V) && (pte & (PTE_R | PTE_W | PTE_X)) == 0) {
+      uint64 child = PTE2PA(pte);
+      //给内核这个地方下一级分配页表并初始化
+      pagetable_t k_child_page = (pte_t* )kalloc();
+      memset(k_child_page, 0, PGSIZE);
+      //把这个页表的物理地址信息记录到当前内核页表项
+      k_pagetable[i] = (PA2PTE(k_child_page) | PTE_V) & (~PTE_U);
+      sync_pagetable((pagetable_t)child, k_child_page);
+    } else if (pte & PTE_V) {
+      //若为叶子节点,那么就直接把用户页表里的页表项复制过来即可,但是要注意更改PTE_U!!!
+      k_pagetable[i] = u_pagetable[i] & (~PTE_U);
+    } 
   }
 }
