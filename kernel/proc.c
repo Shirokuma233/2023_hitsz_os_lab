@@ -145,7 +145,7 @@ static void freeproc(struct proc *p) {
   //vmprint(p->k_pagetable);
   if(p->k_pagetable) proc_free_k_pagetable(p->k_pagetable);
   p->k_pagetable = 0;
-  p->kstack_pa = 0;
+  //p->kstack_pa = 0;
 }
 
 // Create a user page table for a given process,
